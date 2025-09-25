@@ -276,15 +276,23 @@ class Peer(object):
     def _send_heartbeats(self):
         """Send heartbeat to all known peers"""
         with self.lock:
-            peers_to_contact = list(self.peers.items())
+            # peers_to_contact = list(self.peers.items())
+            peers_to_contact = list(self.active_peers)
             
-        for peer_name, peer_uri in peers_to_contact:
+        # for peer_name, peer_uri in peers_to_contact:
+        #     try:
+        #         peer_proxy = Pyro5.api.Proxy(peer_uri)
+        #         peer_proxy.receive_heartbeat(self.name)
+        #     except Exception as e:
+        #         print(f"Failed to send heartbeat to {peer_name}: {e}")
+
+        for peer_name in peers_to_contact:
             try:
-                peer_proxy = Pyro5.api.Proxy(peer_uri)
+                peer_proxy = Pyro5.api.Proxy(f"PYRONAME:{peer_name}")
                 peer_proxy.receive_heartbeat(self.name)
             except Exception as e:
                 print(f"Failed to send heartbeat to {peer_name}: {e}")
-
+                
     def _monitor_peers(self):
         """Monitor peer health and remove inactive ones"""
         while True:
