@@ -85,6 +85,18 @@ class Peer(object):
         """Receive heartbeat from another peer"""
         with self.lock:
             self.last_heartbeat_times[peer_name] = time.time()
+            
+            # If this is a new peer we haven't seen before, look up its URI
+            if peer_name not in self.peers:
+                try:
+                    ns = Pyro5.api.locate_ns()
+                    uri = ns.lookup(peer_name)
+                    self.peers[peer_name] = uri
+                    print(f"Discovered new peer via heartbeat: {peer_name} -> {uri}")
+                except Exception as e:
+                    print(f"Failed to lookup URI for {peer_name}: {e}")
+                    return  # Don't add to active_peers if we can't get the URI
+            
             self.active_peers.add(peer_name)
             print(f"Heartbeat received from {peer_name}")
 
@@ -131,18 +143,22 @@ class Peer(object):
             
             # Send requests to all active peers
             active_peer_list = list(self.active_peers)
-            if not active_peer_list:
-                # No other active peers, can enter immediately
-                self._enter_cs()
-                return
-                
-            for peer_name in active_peer_list:
-                if peer_name in self.peers:
-                    self.pending_responses[peer_name] = False
-                    self._send_request_with_timeout(peer_name)
             
-            # Start checking for responses
-            self._check_enter_cs()
+        # Release lock before making network calls
+        if not active_peer_list:
+            with self.lock:
+                self._enter_cs()
+            return
+            
+        for peer_name in active_peer_list:
+            self.pending_responses[peer_name] = False
+            # Create thread for each request to avoid blocking
+            request_thread = threading.Thread(
+                target=self._send_request_with_timeout, 
+                args=(peer_name,), 
+                daemon=True
+            )
+            request_thread.start()
 
     def _send_request_with_timeout(self, peer_name):
         """Send request to peer with timeout handling"""
@@ -292,7 +308,7 @@ class Peer(object):
                 peer_proxy.receive_heartbeat(self.name)
             except Exception as e:
                 print(f"Failed to send heartbeat to {peer_name}: {e}")
-                
+
     def _monitor_peers(self):
         """Monitor peer health and remove inactive ones"""
         while True:
@@ -345,7 +361,9 @@ def interactive_menu(peer):
             choice = input("Choose option (1-4): ").strip()
             
             if choice == '1':
-                peer.request_cs()
+                # peer.request_cs()
+                thread = threading.Thread(target=peer.request_cs, daemon=True)
+                thread.start()
             elif choice == '2':
                 peer.release_cs()
             elif choice == '3':
