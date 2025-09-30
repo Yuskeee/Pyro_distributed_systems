@@ -6,6 +6,7 @@ import threading
 import argparse
 import sys
 from threading import Timer, Lock
+from apscheduler.schedulers.background import BackgroundScheduler
 
 # Ricart e Agrawala Algorithm with required modifications
 class Peer(object):
@@ -100,22 +101,19 @@ class Peer(object):
                 self._check_enter_cs()
 
     #### Internal Methods ####
-    
+        
     def start_peer(self):
         """Initialize the peer and start background threads"""
-        # Discover other peers
         self._discover_peers()
-        
-        # Start heartbeat thread
-        heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
-        heartbeat_thread.start()
-        
-        # Start peer monitoring thread
-        monitor_thread = threading.Thread(target=self._monitor_peers, daemon=True)
-        monitor_thread.start()
-        
+        # Start Scheduler
+        self.scheduler = BackgroundScheduler()
+        self.scheduler.start()
+        # Schedule heartbeats
+        self.scheduler.add_job(self._send_heartbeats, 'interval', seconds=self.heartbeat_interval)
+        # Schedule monitoring
+        self.scheduler.add_job(self._monitor_peers, 'interval', seconds=self.heartbeat_interval)
         print(f"{self.name} started successfully")
-        
+
     def request_cs(self):
         """Request access to critical section"""
         with self.lock:
@@ -131,6 +129,7 @@ class Peer(object):
             
             # Send requests to all active peers
             active_peer_list = list(self.active_peers)
+
             if not active_peer_list:
                 # No other active peers, can enter immediately
                 self._enter_cs()
@@ -139,6 +138,7 @@ class Peer(object):
             for peer_name in active_peer_list:
                 if peer_name in self.peers:
                     self.pending_responses[peer_name] = False
+                    print("Pending peers:", self.pending_responses)
                     self._send_request_with_timeout(peer_name)
             
             # Start checking for responses
@@ -156,8 +156,10 @@ class Peer(object):
             timer.start()
             
             # Send request
+            print ("Enter SC")
             response = peer_proxy.request_sc(self.name, self.timestamp)
-            
+            print ("Exit SC")
+
             # Cancel timer and process response
             self._cancel_response_timer(peer_name)
             
@@ -267,24 +269,10 @@ class Peer(object):
         except Exception as e:
             print(f"Error discovering peers: {e}")
 
-    def _heartbeat_loop(self):
-        """Send periodic heartbeats to all peers"""
-        while True:
-            time.sleep(self.heartbeat_interval)
-            self._send_heartbeats()
-
     def _send_heartbeats(self):
         """Send heartbeat to all known peers"""
         with self.lock:
-            # peers_to_contact = list(self.peers.items())
             peers_to_contact = list(self.active_peers)
-            
-        # for peer_name, peer_uri in peers_to_contact:
-        #     try:
-        #         peer_proxy = Pyro5.api.Proxy(peer_uri)
-        #         peer_proxy.receive_heartbeat(self.name)
-        #     except Exception as e:
-        #         print(f"Failed to send heartbeat to {peer_name}: {e}")
 
         for peer_name in peers_to_contact:
             try:
@@ -295,25 +283,25 @@ class Peer(object):
                 
     def _monitor_peers(self):
         """Monitor peer health and remove inactive ones"""
-        while True:
-            time.sleep(self.heartbeat_interval)
-            current_time = time.time()
+        # while True:
+        #     time.sleep(self.heartbeat_interval)
+        current_time = time.time()
             
-            with self.lock:
-                inactive_peers = []
-                for peer_name, last_time in self.last_heartbeat_times.items():
-                    if current_time - last_time > self.heartbeat_timeout:
-                        inactive_peers.append(peer_name)
-                
-                for peer_name in inactive_peers:
-                    if peer_name in self.active_peers:
-                        print(f"Marking {peer_name} as inactive")
-                        self.active_peers.discard(peer_name)
-                        
-                        # Remove from pending responses if waiting
-                        if peer_name in self.pending_responses:
-                            del self.pending_responses[peer_name]
-                            self._check_enter_cs()
+        with self.lock:
+            inactive_peers = []
+            for peer_name, last_time in self.last_heartbeat_times.items():
+                if current_time - last_time > self.heartbeat_timeout:
+                    inactive_peers.append(peer_name)
+            
+            for peer_name in inactive_peers:
+                if peer_name in self.active_peers:
+                    print(f"Marking {peer_name} as inactive")
+                    self.active_peers.discard(peer_name)
+                    
+                    # Remove from pending responses if waiting
+                    if peer_name in self.pending_responses:
+                        del self.pending_responses[peer_name]
+                        self._check_enter_cs()
 
     def _is_peer_active(self, peer_name):
         """Check if a peer is considered active"""
